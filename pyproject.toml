@@ -1,0 +1,70 @@
+[project]
+name = "meetscribe-server"
+version = "0.1.0"
+description = "Lean speech backend for MeetScribe: transcription (faster-whisper), speaker diarization and speaker embeddings (ONNX). OpenAI-compatible subset of the speaches API."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.121",
+    "uvicorn[standard]>=0.35",
+    "python-multipart>=0.0.20",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.10",
+    "numpy>=2.3",
+    "faster-whisper>=1.2.1,<2",
+    "ctranslate2>=4.8.2,<5",
+    "huggingface-hub>=0.35,<2",
+    "onnx-diarization==0.1.0",
+    # ONNX Runtime: GPU build on Linux, CPU build elsewhere (see [tool.uv] overrides).
+    "onnxruntime-gpu>=1.26,<1.27 ; sys_platform == 'linux'",
+    "onnxruntime>=1.23 ; sys_platform != 'linux'",
+    # CUDA 12.8 runtime libraries from pip (registered with ldconfig in the Dockerfile).
+    "nvidia-cuda-runtime-cu12==12.8.* ; sys_platform == 'linux'",
+    "nvidia-cuda-nvrtc-cu12==12.8.* ; sys_platform == 'linux'",
+    "nvidia-cublas-cu12==12.8.* ; sys_platform == 'linux'",
+    "nvidia-cudnn-cu12==9.* ; sys_platform == 'linux'",
+    "nvidia-cufft-cu12==11.3.* ; sys_platform == 'linux'",
+    "nvidia-curand-cu12==10.3.* ; sys_platform == 'linux'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "httpx>=0.28",
+    "ruff>=0.14",
+    "mypy>=1.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meetscribe_server"]
+
+[tool.uv]
+# onnx-diarization / onnx-dl / faster-whisper declare onnxruntime(-gpu) in ways that would
+# install both the CPU and the GPU wheel side by side. Force exactly one per platform.
+override-dependencies = [
+    "onnxruntime-gpu>=1.26,<1.27 ; sys_platform == 'linux'",
+    "onnxruntime>=1.23 ; sys_platform != 'linux'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs real models downloaded from Hugging Face (run with -m integration)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

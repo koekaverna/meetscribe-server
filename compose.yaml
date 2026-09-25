@@ -1,0 +1,29 @@
+services:
+  server:
+    container_name: meetscribe-server
+    build: .
+    image: meetscribe-server:local
+    pull_policy: build
+    restart: unless-stopped
+    # No authentication: bind to localhost only. MeetScribe reaches it via host.docker.internal:8000.
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Shared with the previous speaches deployment: already holds all three models.
+      - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
+    environment:
+      STT_MODEL: Systran/faster-whisper-medium
+      LOG_LEVEL: info
+      REQUIRE_GPU: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf-hub-cache:
+    name: hf-hub-cache
+    external: true
