@@ -8,10 +8,10 @@ import faster_whisper.transcribe
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from faster_whisper import BatchedInferencePipeline
-from faster_whisper.vad import VadOptions
+from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from meetscribe_server.audio import decode_upload
-from meetscribe_server.models import ModelStore
+from meetscribe_server.audio import SAMPLE_RATE, decode_upload
+from meetscribe_server.models import ClientGone, ModelStore, acquire_slot
 from meetscribe_server.schemas import (
     Transcription,
     TranscriptionSegment,
@@ -29,14 +29,50 @@ def segments_to_text(segments: list[faster_whisper.transcribe.Segment]) -> str:
     return "".join(segment.text for segment in segments).strip()
 
 
+def merge_clips(
+    speech_chunks: list[dict[str, int]], max_span_s: float, sample_rate: int = SAMPLE_RATE
+) -> list[dict[str, float]]:
+    """Group consecutive VAD speech chunks into clips whose *time span* stays within max_span_s.
+
+    This is the faster-whisper 1.1 / speaches behaviour: a clip is a contiguous stretch of the
+    original audio (silence included) and becomes exactly one output segment, so segment
+    boundaries fall on pauses. faster-whisper 1.2's own VAD path instead concatenates up to 30 s
+    of *speech* and reports one segment spanning all of it, hiding long pauses inside a segment.
+    """
+    if not speech_chunks:
+        return []
+    max_span = int(max_span_s * sample_rate)
+    clips: list[dict[str, float]] = []
+    start = speech_chunks[0]["start"]
+    end = speech_chunks[0]["end"]
+    for chunk in speech_chunks[1:]:
+        if chunk["end"] - start > max_span:
+            clips.append({"start": start / sample_rate, "end": end / sample_rate})
+            start = chunk["start"]
+        end = chunk["end"]
+    clips.append({"start": start / sample_rate, "end": end / sample_rate})
+    return clips
+
+
+def fixed_clips(duration_s: float, span_s: float = 30.0) -> list[dict[str, float]]:
+    """Consecutive fixed windows for the no-VAD path (the batched pipeline needs explicit clips)."""
+    clips = []
+    start = 0.0
+    while start < duration_s:
+        clips.append({"start": start, "end": min(start + span_s, duration_s)})
+        start += span_s
+    return clips
+
+
 def build_verbose_response(
     segments: list[faster_whisper.transcribe.Segment],
-    info: faster_whisper.transcribe.TranscriptionInfo,
+    language: str,
+    duration: float,
     word_timestamps: bool,
 ) -> TranscriptionVerbose:
     return TranscriptionVerbose(
-        language=info.language,
-        duration=info.duration,
+        language=language,
+        duration=duration,
         text=segments_to_text(segments),
         segments=[
             TranscriptionSegment(
@@ -88,38 +124,52 @@ async def transcribe(
     word_timestamps = "word" in granularities
 
     audio = decode_upload(file)
-    duration = audio.size / 16000
+    duration = audio.size / SAMPLE_RATE
 
-    def run() -> tuple[list[faster_whisper.transcribe.Segment], faster_whisper.transcribe.TranscriptionInfo]:
-        with store.stt_semaphore:
-            whisper = store.whisper(model_id)
-            pipeline = BatchedInferencePipeline(model=whisper)
-            segments, info = pipeline.transcribe(
-                audio,
-                task="transcribe",
-                language=language,
-                initial_prompt=prompt,
-                temperature=temperature,
-                beam_size=settings.stt_beam_size,
-                batch_size=settings.stt_batch_size,
-                vad_filter=settings.stt_vad_filter,
-                vad_parameters=VadOptions(
-                    min_silence_duration_ms=settings.stt_vad_min_silence_ms,
-                    max_speech_duration_s=settings.stt_vad_max_speech_s,
-                ),
-                word_timestamps=word_timestamps,
-                hotwords=hotwords,
-                without_timestamps=without_timestamps,
+    def run() -> tuple[list[faster_whisper.transcribe.Segment], str]:
+        whisper = store.whisper(model_id)
+        if settings.stt_vad_filter:
+            vad_options = VadOptions(
+                min_silence_duration_ms=settings.stt_vad_min_silence_ms,
+                max_speech_duration_s=settings.stt_vad_max_speech_s,
             )
-            return list(segments), info
+            clips = merge_clips(get_speech_timestamps(audio, vad_options), settings.stt_vad_max_speech_s)
+        else:
+            clips = fixed_clips(duration, settings.stt_vad_max_speech_s)
+        if not clips:
+            logger.info("VAD found no speech in %s", file.filename)
+            return [], language or ""
+        pipeline = BatchedInferencePipeline(model=whisper)
+        segments, info = pipeline.transcribe(
+            audio,
+            task="transcribe",
+            language=language,
+            initial_prompt=prompt,
+            temperature=temperature,
+            beam_size=settings.stt_beam_size,
+            batch_size=settings.stt_batch_size,
+            vad_filter=False,
+            clip_timestamps=clips,
+            word_timestamps=word_timestamps,
+            hotwords=hotwords,
+            without_timestamps=without_timestamps,
+        )
+        return list(segments), info.language
 
     t0 = time.perf_counter()
     try:
-        segments, info = await run_in_threadpool(run)
+        await acquire_slot(store.stt_semaphore, request)
+    except ClientGone:
+        logger.warning("Client disconnected while %s waited for a transcription slot; skipping", file.filename)
+        return Response(status_code=499)
+    try:
+        segments, detected_language = await run_in_threadpool(run)
     except (ValueError, FileNotFoundError, OSError) as e:
         # faster-whisper raises these for unknown / not-downloadable model ids
         logger.warning("Transcription with model %s failed: %s", model_id, e)
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' is not available: {e}") from e
+    finally:
+        store.stt_semaphore.release()
     elapsed = time.perf_counter() - t0
     logger.info(
         "Transcribed %s: %.1fs of audio in %.2fs (rtf %.3f, %d segments, model=%s)",
@@ -136,5 +186,5 @@ async def transcribe(
     if response_format == "json":
         body = Transcription(text=segments_to_text(segments)).model_dump_json()
         return Response(content=body, media_type="application/json")
-    verbose = build_verbose_response(segments, info, word_timestamps)
+    verbose = build_verbose_response(segments, detected_language, duration, word_timestamps)
     return Response(content=verbose.model_dump_json(), media_type="application/json")

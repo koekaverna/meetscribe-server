@@ -58,8 +58,7 @@ def _segment(i: int, start: float, end: float, text: str) -> SimpleNamespace:
 
 def test_verbose_response_matches_openai_shape() -> None:
     segments = [_segment(0, 0.0, 1.5, " Привет"), _segment(1, 1.5, 3.0, " мир")]
-    info = SimpleNamespace(language="ru", duration=3.0)
-    res = build_verbose_response(segments, info, word_timestamps=False)  # type: ignore[arg-type]
+    res = build_verbose_response(segments, "ru", 3.0, word_timestamps=False)  # type: ignore[arg-type]
     body = res.model_dump()
     assert body["text"] == "Привет мир"
     assert body["language"] == "ru"
@@ -82,7 +81,7 @@ def test_verbose_response_matches_openai_shape() -> None:
     assert seg["no_speech_prob"] == 0.05
     assert segments_to_text(segments) == "Привет мир"  # type: ignore[arg-type]
 
-    with_words = build_verbose_response(segments, info, word_timestamps=True)  # type: ignore[arg-type]
+    with_words = build_verbose_response(segments, "ru", 3.0, word_timestamps=True)  # type: ignore[arg-type]
     assert [w.word for w in with_words.words or []] == ["Привет", "мир"]
 
 

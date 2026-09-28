@@ -25,6 +25,19 @@ Models are read from / downloaded into the external volume `hf-hub-cache`
 (`/home/ubuntu/.cache/huggingface/hub`). The container fails fast at startup if CUDA is not
 usable by both CTranslate2 and ONNX Runtime (`REQUIRE_GPU=true`).
 
+## Behaviour worth knowing
+
+- **GPU concurrency** is bounded per task (`MAX_CONCURRENT_*`); extra requests queue. A queued request
+  whose client has already disconnected (MeetScribe times out after 600 s and retries) is dropped with
+  HTTP 499 instead of being processed for nobody.
+- **GPU memory stays flat.** ONNX Runtime sessions run with `arena_extend_strategy=kSameAsRequested` and
+  arena shrinkage after every run, so the process sits at roughly the model weights (~2 GB on an RTX 4080)
+  between requests instead of accumulating reserved memory until CUDA OOM.
+- **Transcription segments follow pauses.** VAD speech chunks are grouped into clips of at most
+  `STT_VAD_MAX_SPEECH_S` seconds of *timeline* (faster-whisper 1.1 / speaches semantics), and each clip is
+  one output segment, so long silences never end up inside a segment.
+- **Diarization is VAD-free** and works on the whole file, exactly like the speaches endpoint did.
+
 ## Configuration (environment)
 
 | Variable | Default | Meaning |

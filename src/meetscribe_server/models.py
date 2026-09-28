@@ -25,13 +25,39 @@ class GpuUnavailableError(RuntimeError):
     pass
 
 
+class ArenaShrinkingSession:
+    """Proxy around an ONNX Runtime session that returns unused GPU arena memory after every run.
+
+    ORT's BFC arena never shrinks on its own; with several sessions and varying batch shapes the
+    reserved GPU memory kept growing until the RTX 4080 was full (observed: 14.7 GB after a few
+    days, then CUDA OOM). Shrinking after each `run()` keeps the steady state at the model weights.
+    """
+
+    def __init__(self, session: Any, device_id: int | None) -> None:
+        import onnxruntime as ort
+
+        self._session = session
+        self._run_options: Any = None
+        if device_id is not None:
+            self._run_options = ort.RunOptions()
+            self._run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", f"gpu:{device_id}")
+
+    def run(self, output_names: Any, input_feed: Any, run_options: Any = None) -> Any:
+        return self._session.run(output_names, input_feed, run_options or self._run_options)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+
 def ort_providers(require_gpu: bool) -> list[Any]:
     import onnxruntime as ort
 
     available = ort.get_available_providers()
     logger.info("ONNX Runtime %s, available providers: %s", ort.__version__, available)
     if CUDA_PROVIDER in available:
-        return [(CUDA_PROVIDER, {"device_id": 0}), CPU_PROVIDER]
+        # kSameAsRequested: extend the arena by exactly what is needed instead of doubling chunks.
+        cuda_options = {"device_id": 0, "arena_extend_strategy": "kSameAsRequested"}
+        return [(CUDA_PROVIDER, cuda_options), CPU_PROVIDER]
     if require_gpu:
         raise GpuUnavailableError(
             f"ONNX Runtime has no {CUDA_PROVIDER} (available: {available}). "
@@ -46,6 +72,25 @@ def ctranslate2_cuda_devices() -> int:
     count = ctranslate2.get_cuda_device_count()
     logger.info("CTranslate2 %s, CUDA devices: %d", ctranslate2.__version__, count)
     return count
+
+
+class ClientGone(Exception):  # noqa: N818 - control-flow signal, not an error condition
+    """The HTTP client disconnected while the request was waiting for a GPU slot."""
+
+
+async def acquire_slot(semaphore: threading.Semaphore, request: Any, poll_s: float = 0.5) -> None:
+    """Wait for a semaphore without blocking the event loop, giving up if the client goes away.
+
+    MeetScribe retries with a 600 s timeout. If the client has already given up, running its
+    request anyway only lengthens the queue for everyone behind it (a 5793 s track was
+    diarized nine times in a row this way). The caller must release the semaphore.
+    """
+    import asyncio
+
+    while not semaphore.acquire(blocking=False):
+        if await request.is_disconnected():
+            raise ClientGone
+        await asyncio.sleep(poll_s)
 
 
 class ModelStore:
@@ -140,7 +185,7 @@ class ModelStore:
             raise GpuUnavailableError(
                 f"{repo_id} session fell back to {active}; the CUDA provider failed to initialise."
             )
-        return session
+        return ArenaShrinkingSession(session, device_id=0 if active[0] == CUDA_PROVIDER else None)
 
     def segmentation_session(self) -> Any:
         with self._onnx_lock:

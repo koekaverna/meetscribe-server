@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from pyannote.core import Annotation
 
 from meetscribe_server.audio import decode_upload, duration_seconds
-from meetscribe_server.models import ModelStore
+from meetscribe_server.models import ClientGone, ModelStore, acquire_slot
 from meetscribe_server.schemas import DiarizationResponse, DiarizationSegment
 
 logger = logging.getLogger(__name__)
@@ -55,15 +55,21 @@ async def diarize(
     duration = duration_seconds(audio)
 
     def run() -> Annotation:
-        with store.diarization_semaphore:
-            pipeline = store.diarization_pipeline()
-            return pipeline(audio, file_id=file.filename, min_speakers=min_speakers, max_speakers=max_speakers)
+        pipeline = store.diarization_pipeline()
+        return pipeline(audio, file_id=file.filename, min_speakers=min_speakers, max_speakers=max_speakers)
 
     t0 = time.perf_counter()
+    try:
+        await acquire_slot(store.diarization_semaphore, request)
+    except ClientGone:
+        logger.warning("Client disconnected while %s waited for a diarization slot; skipping", file.filename)
+        return Response(status_code=499)
     try:
         annotation = await run_in_threadpool(run)
     except ValueError as e:  # invalid min/max speakers
         raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        store.diarization_semaphore.release()
     elapsed = time.perf_counter() - t0
 
     if response_format == "rttm":
