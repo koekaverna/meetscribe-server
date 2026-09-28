@@ -3,6 +3,7 @@
 uv run pytest -m integration
 """
 
+import json
 import math
 
 import pytest
@@ -85,3 +86,21 @@ def test_diarization_shape(client: TestClient, wav_bytes: bytes) -> None:
         assert seg["speaker"].startswith("SPEAKER_")
         # the last 10 s segmentation window is zero-padded, so ends may slightly overshoot the audio
         assert 0 <= seg["start"] <= seg["end"] <= body["duration"] + 0.5
+
+
+def test_clips_endpoint_matches_per_chunk_uploads(client: TestClient, wav_bytes: bytes) -> None:
+    clips = [{"start": 0.0, "end": 1.5, "speaker": "A"}, {"start": 1.5, "end": 3.0, "speaker": "B"}]
+    r = client.post(
+        "/v1/audio/transcriptions/clips",
+        files={"file": ("a.wav", wav_bytes, "audio/wav")},
+        data={"model": "Systran/faster-whisper-tiny", "language": "en", "clips": json.dumps(clips), "vad": "false"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["clips"] == 2
+    assert body["failed_clips"] == []
+    for seg in body["segments"]:
+        clip = clips[seg["clip_index"]]
+        assert seg["speaker"] == clip["speaker"]
+        assert clip["start"] - 0.01 <= seg["start"] <= seg["end"] <= clip["end"] + 0.5
+        assert {"avg_logprob", "no_speech_prob", "compression_ratio"} <= set(seg)

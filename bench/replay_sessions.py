@@ -143,8 +143,11 @@ class Wav:
 
 
 class Backend:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, model: str = STT_MODEL, clips_endpoint: bool = False, pad_ms: int = 0) -> None:
         self.url = url.rstrip("/")
+        self.model = model
+        self.clips_endpoint = clips_endpoint
+        self.pad_ms = pad_ms
         self.client = httpx.Client(timeout=3600)
 
     def post(self, path: str, name: str, data: bytes, form: dict) -> tuple[dict, float]:
@@ -163,14 +166,28 @@ class Backend:
 
     def transcribe(self, name: str, data: bytes, timing: Timing) -> tuple[list[Seg], float]:
         form = {
-            "model": STT_MODEL,
+            "model": self.model,
             "language": LANGUAGE,
             "response_format": "verbose_json",
             "timestamp_granularities[]": "segment",
         }
         body, dt = self.post("/v1/audio/transcriptions", name, data, form)
+        return self.keep(body.get("segments", []), timing), dt
+
+    def transcribe_clips(self, name: str, data: bytes, chunks: list[Seg], timing: Timing) -> tuple[list[Seg], float]:
+        """One request per track: the whole file plus the chunk list (new contract)."""
+        clips = [{"start": c.start_ms / 1000, "end": c.end_ms / 1000, "speaker": c.speaker} for c in chunks]
+        form = {"model": self.model, "language": LANGUAGE, "clips": json.dumps(clips), "pad_ms": str(self.pad_ms)}
+        body, dt = self.post("/v1/audio/transcriptions/clips", name, data, form)
+        if body.get("failed_clips"):
+            print(f"      failed clips: {body['failed_clips'][:5]}")
+        return self.keep(body.get("segments", []), timing), dt
+
+    @staticmethod
+    def keep(segments: list[dict], timing: Timing) -> list[Seg]:
+        """MeetScribe's hallucination filter."""
         out: list[Seg] = []
-        for seg in body.get("segments", []):
+        for seg in segments:
             text = seg.get("text", "").strip()
             if not text:
                 continue
@@ -182,7 +199,7 @@ class Backend:
                 continue
             timing.kept_segments += 1
             out.append(Seg(int(seg["start"] * 1000), int(seg["end"] * 1000), None, text))
-        return out, dt
+        return out
 
 
 # --- pipeline replay ---
@@ -242,6 +259,15 @@ def replay_track(
 
     merged = merge_close_segments(segments, MAX_GAP_MS, MAX_CHUNK_MS)
     timing.chunks += len(merged)
+    if backend.clips_endpoint:
+        t0 = time.perf_counter()
+        segs, dt = backend.transcribe_clips(path.name, path.read_bytes(), merged, timing)
+        timing.stt_chunk_elapsed_s += time.perf_counter() - t0
+        timing.stt_chunk_wall_s += dt
+        timing.stt_chunk_audio_s += sum(c.duration_ms for c in merged) / 1000
+        for s in segs:
+            s.speaker = find_speaker(s.start_ms, s.end_ms, segments)
+        return segs
     results: list[list[Seg]] = [[] for _ in merged]
 
     def work(i: int, chunk: Seg) -> None:
@@ -372,13 +398,23 @@ def main() -> None:
     ap.add_argument("--db", default="E:/meetscribe/data/meetscribe.db")
     ap.add_argument("--data", default="E:/meetscribe/data")
     ap.add_argument("--out", default="bench/results")
+    ap.add_argument("--model", default=STT_MODEL, help="Whisper model id sent with every transcription request")
+    ap.add_argument("--clips", action="store_true", help="use /v1/audio/transcriptions/clips (one request per track)")
+    ap.add_argument("--pad-ms", type=int, default=0, help="clip padding for --clips")
     ap.add_argument("sessions", nargs="+")
     args = ap.parse_args()
 
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    backend = Backend(args.server)
+    backend = Backend(args.server, args.model, args.clips, args.pad_ms)
     data = Path(args.data)
-    report: dict = {"server": args.server, "sessions": [], "vram_start_mb": vram_mb()}
+    report: dict = {
+        "server": args.server,
+        "model": args.model,
+        "clips_endpoint": args.clips,
+        "pad_ms": args.pad_ms,
+        "sessions": [],
+        "vram_start_mb": vram_mb(),
+    }
     grand = Timing()
     all_ref_words = all_err_words = 0.0
     agree_time = total_time = 0.0

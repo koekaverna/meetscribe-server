@@ -7,3 +7,6 @@ __pycache__/
 .env
 dist/
 bench/results/
+bench/groundtruth/testset/
+bench/groundtruth/raw/
+bench/groundtruth/results/

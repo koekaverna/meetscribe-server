@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     """Run Silero VAD inside faster-whisper before decoding (same behaviour as speaches)."""
     stt_vad_min_silence_ms: int = 160
     stt_vad_max_speech_s: float = 30.0
+    stt_vad_empty_fallback: bool = True
+    """When VAD finds no speech in an upload (or clip) no longer than stt_vad_max_speech_s,
+    transcribe it as one clip instead of returning nothing. MeetScribe only uploads chunks its
+    diarization already classified as speech, so an empty VAD result there is usually a miss
+    on a quiet speaker."""
+    stt_allowed_models: str = ""
+    """Comma-separated Whisper model ids a request may name in addition to stt_model. Any other
+    id is rejected with 404: loading a model replaces the resident one and stalls every
+    concurrent request, so a stray id must not be able to trigger it."""
+    stt_clip_pad_ms: int = 0
+    """Default padding around each clip of /v1/audio/transcriptions/clips (request may override)."""
 
     # --- Diarization / speaker embeddings (onnx-diarization, ONNX Runtime) ---
     seg_model: str = "fedirz/segmentation_community_1"
@@ -43,3 +54,7 @@ class Settings(BaseSettings):
     preload: bool = True
     """Load all models during startup instead of on first request."""
     log_level: str = "info"
+
+    def allowed_stt_models(self) -> set[str]:
+        extra = {m.strip() for m in self.stt_allowed_models.split(",") if m.strip()}
+        return {self.stt_model} | extra

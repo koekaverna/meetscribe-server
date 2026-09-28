@@ -37,6 +37,28 @@ class TranscriptionVerbose(BaseModel):
     words: list[TranscriptionWord] | None = None
 
 
+# --- /v1/audio/transcriptions/clips ---
+
+
+class ClipSegment(TranscriptionSegment):
+    clip_index: int
+    speaker: str | None = None
+
+
+class FailedClip(BaseModel):
+    clip_index: int
+    reason: str
+
+
+class ClipsTranscription(BaseModel):
+    task: Literal["transcribe"] = "transcribe"
+    language: str
+    duration: float
+    clips: int
+    segments: list[ClipSegment]
+    failed_clips: list[FailedClip]
+
+
 # --- /v1/audio/diarization ---
 
 
