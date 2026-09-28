@@ -1,9 +1,17 @@
 [project]
 name = "meetscribe-server"
 version = "0.1.0"
-description = "Lean speech backend for MeetScribe: transcription (faster-whisper), speaker diarization and speaker embeddings (ONNX). OpenAI-compatible subset of the speaches API."
+description = "GPU speech backend for MeetScribe: Whisper transcription, VAD-free speaker diarization and speaker embeddings."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Egor Korobov" }]
+keywords = ["speech-to-text", "whisper", "faster-whisper", "diarization", "speaker-embedding", "fastapi"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.121",
@@ -27,6 +35,10 @@ dependencies = [
     "nvidia-cufft-cu12==11.3.* ; sys_platform == 'linux'",
     "nvidia-curand-cu12==10.3.* ; sys_platform == 'linux'",
 ]
+
+[project.urls]
+Repository = "https://github.com/koekaverna/meetscribe-server"
+Issues = "https://github.com/koekaverna/meetscribe-server/issues"
 
 [dependency-groups]
 dev = [
@@ -64,6 +76,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# One-off measurement scripts: kept as they were run, formatted only.
+"bench/groundtruth/*" = ["E402", "E501", "E741", "B007", "SIM105", "SIM115"]
 
 [tool.mypy]
 python_version = "3.12"

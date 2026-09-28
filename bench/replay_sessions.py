@@ -6,7 +6,10 @@ transcription -> hallucination filter, or whole-file transcription for named tra
 backend URL and reports text agreement (WER), speaker agreement, segment counts and speed.
 
     uv run --with jiwer python bench/replay_sessions.py --server http://127.0.0.1:8000 \
-        --db E:/meetscribe/data/meetscribe.db --data E:/meetscribe/data SESSION_ID [SESSION_ID ...]
+        --db /path/to/meetscribe/data/meetscribe.db --data /path/to/meetscribe/data \
+        SESSION_ID [SESSION_ID ...]
+
+The database is opened read-only. Results contain transcript text: keep them out of git.
 """
 
 from __future__ import annotations
@@ -395,8 +398,8 @@ def word_diffs(ref_text: str, hyp_text: str, context: int = 4) -> list[dict]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", default="http://127.0.0.1:8000")
-    ap.add_argument("--db", default="E:/meetscribe/data/meetscribe.db")
-    ap.add_argument("--data", default="E:/meetscribe/data")
+    ap.add_argument("--db", required=True, help="path to MeetScribe's meetscribe.db (opened read-only)")
+    ap.add_argument("--data", required=True, help="MeetScribe data directory that holds sessions/")
     ap.add_argument("--out", default="bench/results")
     ap.add_argument("--model", default=STT_MODEL, help="Whisper model id sent with every transcription request")
     ap.add_argument("--clips", action="store_true", help="use /v1/audio/transcriptions/clips (one request per track)")

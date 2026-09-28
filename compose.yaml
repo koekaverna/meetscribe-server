@@ -5,11 +5,12 @@ services:
     image: meetscribe-server:local
     pull_policy: build
     restart: unless-stopped
-    # No authentication: bind to localhost only. MeetScribe reaches it via host.docker.internal:8000.
+    # No authentication: bind to localhost only. A MeetScribe container on the same host
+    # reaches it as http://host.docker.internal:8000.
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      # Shared with the previous speaches deployment: already holds all three models.
+      # Hugging Face model cache. Create it once: docker volume create hf-hub-cache
       - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
     environment:
       STT_MODEL: deepdml/faster-whisper-large-v3-turbo-ct2

@@ -1,7 +1,7 @@
 # Ground-truth benchmark
 
 Measures word error rate of a running server against public Russian speech with human references.
-Built during the 2026-09-28 research; numbers from that run are in `docs/plans/2026-09-28-backend-plan.md`.
+Results of the 2026-09-28 run are in [docs/benchmarks.md](../../docs/benchmarks.md).
 
 ## Test set
 
