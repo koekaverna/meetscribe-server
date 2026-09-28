@@ -12,9 +12,9 @@ services:
       # Shared with the previous speaches deployment: already holds all three models.
       - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
     environment:
-      STT_MODEL: Systran/faster-whisper-medium
+      STT_MODEL: deepdml/faster-whisper-large-v3-turbo-ct2
       # Models a request may switch to. MeetScribe names its model in every request.
-      STT_ALLOWED_MODELS: deepdml/faster-whisper-large-v3-turbo-ct2
+      STT_ALLOWED_MODELS: Systran/faster-whisper-medium
       LOG_LEVEL: info
       REQUIRE_GPU: "true"
     deploy:
