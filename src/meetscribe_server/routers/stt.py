@@ -21,6 +21,7 @@ from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from meetscribe_server.audio import SAMPLE_RATE, decode_upload
 from meetscribe_server.config import Settings
+from meetscribe_server.hallucinations import is_known_hallucination
 from meetscribe_server.models import ClientGone, ModelStore, acquire_slot
 from meetscribe_server.schemas import (
     ClipSegment,
@@ -190,7 +191,7 @@ async def transcribe(
 
     audio = decode_upload(file)
     duration = audio.size / SAMPLE_RATE
-    stats = {"clips": 0, "vad_fallback": False}
+    stats = {"clips": 0, "vad_fallback": False, "hallucinations": 0}
 
     def run() -> tuple[list[faster_whisper.transcribe.Segment], str]:
         whisper = store.whisper(model_id)
@@ -222,7 +223,12 @@ async def transcribe(
             hotwords=hotwords,
             without_timestamps=without_timestamps,
         )
-        return list(segments), info.language
+        kept = list(segments)
+        if settings.stt_drop_known_hallucinations:
+            total = len(kept)
+            kept = [seg for seg in kept if not is_known_hallucination(seg.text)]
+            stats["hallucinations"] = total - len(kept)
+        return kept, info.language
 
     t0 = time.perf_counter()
     try:
@@ -241,7 +247,8 @@ async def transcribe(
         store.stt_semaphore.release()
     elapsed = time.perf_counter() - t0
     logger.info(
-        "Transcribed %s: %.1fs of audio in %.2fs (rtf %.3f, waited %.2fs, %d clips%s, %d segments, model=%s)",
+        "Transcribed %s: %.1fs of audio in %.2fs (rtf %.3f, waited %.2fs, %d clips%s, %d segments, "
+        "%d known hallucinations dropped, model=%s)",
         file.filename,
         duration,
         elapsed,
@@ -250,6 +257,7 @@ async def transcribe(
         stats["clips"],
         ", vad-empty fallback" if stats["vad_fallback"] else "",
         len(segments),
+        stats["hallucinations"],
         model_id,
     )
 
@@ -418,6 +426,7 @@ async def transcribe_clips(
     audio = decode_upload(file)
     duration = audio.size / SAMPLE_RATE
     cancel = threading.Event()
+    dropped = [0]
 
     def run() -> tuple[list[ClipSegment], list[FailedClip], str]:
         whisper = store.whisper(model_id)
@@ -451,6 +460,9 @@ async def transcribe_clips(
                     logger.warning("Segment at seek %d matches no requested clip; dropped", seg.seek)
                     continue
                 decoded.add(seg.seek)
+                if settings.stt_drop_known_hallucinations and is_known_hallucination(seg.text):
+                    dropped[0] += 1
+                    continue
                 if seg.text.strip():
                     out.append(ClipSegment(**segment_fields(seg), clip_index=req.index, speaker=req.speaker))
         except ClientGone:
@@ -484,7 +496,8 @@ async def transcribe_clips(
     elapsed = time.perf_counter() - t0
     clip_audio = sum(r.end - r.start for r in requests)
     logger.info(
-        "Transcribed %s: %d clips (%.1fs of %.1fs) in %.2fs (rtf %.3f, waited %.2fs, %d segments, %d failed, model=%s)",
+        "Transcribed %s: %d clips (%.1fs of %.1fs) in %.2fs (rtf %.3f, waited %.2fs, %d segments, %d failed, "
+        "%d known hallucinations dropped, model=%s)",
         file.filename,
         len(requests),
         clip_audio,
@@ -494,6 +507,7 @@ async def transcribe_clips(
         waited,
         len(segments),
         len(failed),
+        dropped[0],
         model_id,
     )
     body = ClipsTranscription(

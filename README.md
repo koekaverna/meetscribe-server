@@ -84,7 +84,8 @@ at 8: two transcriptions and a diarization may run at once on a 16 GB card.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STT_MODEL` | `Systran/faster-whisper-medium` | Whisper model loaded at startup |
+| `STT_MODEL` | `Systran/faster-whisper-medium` | Whisper model loaded at startup (`compose.yaml` sets `deepdml/faster-whisper-large-v3-turbo-ct2`) |
+| `STT_DROP_KNOWN_HALLUCINATIONS` | `true` | Drop segments that are only a known Whisper hallucination ("Продолжение следует", subtitle credits). Confidence scores cannot catch them on turbo models |
 | `STT_ALLOWED_MODELS` | empty | Comma-separated model ids a request may name besides `STT_MODEL`. Naming one swaps it in (one Whisper model stays resident); any other id gets 404 |
 | `STT_VAD_EMPTY_FALLBACK` | `true` | If VAD hears nothing in an upload or clip of at most 30 s, transcribe it whole instead of returning nothing |
 | `STT_CLIP_PAD_MS` | `0` | Default padding around clips of `/v1/audio/transcriptions/clips` |

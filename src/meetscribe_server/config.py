@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     transcribe it as one clip instead of returning nothing. MeetScribe only uploads chunks its
     diarization already classified as speech, so an empty VAD result there is usually a miss
     on a quiet speaker."""
+    stt_drop_known_hallucinations: bool = True
+    """Drop segments that consist only of a known Whisper hallucination ("Продолжение следует",
+    subtitle credits). See hallucinations.py."""
     stt_allowed_models: str = ""
     """Comma-separated Whisper model ids a request may name in addition to stt_model. Any other
     id is rejected with 404: loading a model replaces the resident one and stalls every
